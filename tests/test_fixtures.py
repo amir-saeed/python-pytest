@@ -39,28 +39,35 @@ class TestUserOperations:
 
 import pytest
 import boto3
-from moto import mock_dynamodb
+from moto import mock_aws  # ✅ New import
 
 @pytest.fixture(scope="module")
 def dynamodb_table():
     print("\n🔧 Creating DynamoDB table ONCE for module")
-    with mock_dynamodb():
+    
+    with mock_aws():  # ✅ Changed here
         dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+        
         table = dynamodb.create_table(
             TableName='Users',
             KeySchema=[{'AttributeName': 'id', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'id', 'AttributeType': 'S'}],
             BillingMode='PAY_PER_REQUEST'
         )
-        yield table  # All tests share this table
+        
+        yield table  # Tests use this
+
 
 def test_put_item(dynamodb_table):
     dynamodb_table.put_item(Item={'id': '1', 'name': 'Alice'})
+    assert True
     print("✅ Item added")
+
 
 def test_get_item(dynamodb_table):
     response = dynamodb_table.get_item(Key={'id': '1'})
-    print(f"✅ Found: {response['Item']['name']}")  # Alice still there!
+    assert response['Item']['name'] == 'Alice'
+    print(f"✅ Found: {response['Item']['name']}")
 
 
 
