@@ -1,0 +1,95 @@
+"""S3 Bucket Manager with AWS Powertools integration."""
+
+from typing import List
+
+import boto3
+from aws_lambda_powertools import Logger, Tracer
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from botocore.exceptions import ClientError
+from pydantic import BaseModel, Field
+
+logger = Logger(service="s3-manager")
+tracer = Tracer(service="s3-manager")
+
+
+class BucketInfo(BaseModel):
+    """S3 Bucket information model."""
+
+    name: str = Field(..., description="Bucket name")
+    creation_date: str = Field(..., description="Bucket creation date")
+
+
+class S3BucketManager:
+    """Handles S3 bucket operations."""
+
+    def __init__(self, region: str = "us-east-1") -> None:
+        """Initialize S3 client."""
+        self.s3_client = boto3.client("s3", region_name=region)
+
+    @tracer.capture_method
+    def create_bucket(self, bucket_name: str) -> dict[str, str]:
+        """Create S3 bucket."""
+        try:
+            if self.s3_client.meta.region_name == "us-east-1":
+                self.s3_client.create_bucket(Bucket=bucket_name)
+            else:
+                self.s3_client.create_bucket(
+                    Bucket=bucket_name,
+                    CreateBucketConfiguration={"LocationConstraint": self.s3_client.meta.region_name},
+                )
+            logger.info(f"Bucket created: {bucket_name}")
+            return {"status": "success", "bucket": bucket_name}
+        except ClientError as e:
+            logger.error(f"Failed to create bucket: {e}")
+            raise
+
+    @tracer.capture_method
+    def delete_bucket(self, bucket_name: str) -> dict[str, str]:
+        """Delete S3 bucket."""
+        try:
+            self.s3_client.delete_bucket(Bucket=bucket_name)
+            logger.info(f"Bucket deleted: {bucket_name}")
+            return {"status": "success", "bucket": bucket_name}
+        except ClientError as e:
+            logger.error(f"Failed to delete bucket: {e}")
+            raise
+
+    @tracer.capture_method
+    def list_buckets(self) -> List[BucketInfo]:
+        """List all S3 buckets."""
+        try:
+            response = self.s3_client.list_buckets()
+            buckets = [
+                BucketInfo(
+                    name=bucket["Name"],
+                    creation_date=bucket["CreationDate"].isoformat(),
+                )
+                for bucket in response.get("Buckets", [])
+            ]
+            logger.info(f"Found {len(buckets)} buckets")
+            return buckets
+        except ClientError as e:
+            logger.error(f"Failed to list buckets: {e}")
+            raise
+
+
+@logger.inject_lambda_context
+@tracer.capture_lambda_handler
+def lambda_handler(event: dict, context: LambdaContext) -> dict:
+    """Lambda handler for S3 operations."""
+    manager = S3BucketManager()
+    operation = event.get("operation")
+    bucket_name = event.get("bucket_name")
+
+    match operation:
+        case "create":
+            result = manager.create_bucket(bucket_name)
+        case "delete":
+            result = manager.delete_bucket(bucket_name)
+        case "list":
+            buckets = manager.list_buckets()
+            result = {"buckets": [b.model_dump() for b in buckets]}
+        case _:
+            result = {"error": "Invalid operation"}
+
+    return {"statusCode": 200, "body": result}

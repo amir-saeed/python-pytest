@@ -1,0 +1,88 @@
+"""Tests for S3 Bucket Manager using moto."""
+
+import pytest
+from moto import mock_aws
+
+from s3_manager import BucketInfo, S3BucketManager, lambda_handler
+
+
+@pytest.fixture
+def s3_manager():
+    """Fixture for S3BucketManager with mocked AWS."""
+    with mock_aws():
+        yield S3BucketManager(region="us-east-1")
+
+
+@pytest.fixture
+def s3_manager_other_region():
+    """Fixture for S3BucketManager in non-us-east-1 region."""
+    with mock_aws():
+        yield S3BucketManager(region="eu-west-1")
+
+
+class TestS3BucketManager:
+    """Test suite for S3BucketManager."""
+
+    def test_create_bucket_us_east_1(self, s3_manager):
+        """Test bucket creation in us-east-1."""
+        result = s3_manager.create_bucket("test-bucket")
+        assert result["status"] == "success"
+        assert result["bucket"] == "test-bucket"
+
+    def test_create_bucket_other_region(self, s3_manager_other_region):
+        """Test bucket creation in non-us-east-1 region."""
+        result = s3_manager_other_region.create_bucket("test-bucket-eu")
+        assert result["status"] == "success"
+        assert result["bucket"] == "test-bucket-eu"
+
+    def test_delete_bucket(self, s3_manager):
+        """Test bucket deletion."""
+        s3_manager.create_bucket("test-delete")
+        result = s3_manager.delete_bucket("test-delete")
+        assert result["status"] == "success"
+
+    def test_list_buckets_empty(self, s3_manager):
+        """Test listing when no buckets exist."""
+        buckets = s3_manager.list_buckets()
+        assert isinstance(buckets, list)
+        assert len(buckets) == 0
+
+    def test_list_buckets_with_data(self, s3_manager):
+        """Test listing multiple buckets."""
+        s3_manager.create_bucket("bucket-1")
+        s3_manager.create_bucket("bucket-2")
+
+        buckets = s3_manager.list_buckets()
+        assert len(buckets) == 2
+        assert all(isinstance(b, BucketInfo) for b in buckets)
+        assert {b.name for b in buckets} == {"bucket-1", "bucket-2"}
+
+
+class TestLambdaHandler:
+    """Test Lambda handler integration."""
+
+    @mock_aws
+    def test_lambda_create_operation(self):
+        """Test Lambda handler create operation."""
+        event = {"operation": "create", "bucket_name": "lambda-test"}
+        result = lambda_handler(event, None)
+        assert result["statusCode"] == 200
+        assert result["body"]["status"] == "success"
+
+    @mock_aws
+    def test_lambda_list_operation(self):
+        """Test Lambda handler list operation."""
+        manager = S3BucketManager()
+        manager.create_bucket("test-1")
+
+        event = {"operation": "list"}
+        result = lambda_handler(event, None)
+        assert result["statusCode"] == 200
+        assert len(result["body"]["buckets"]) == 1
+
+    @mock_aws
+    def test_lambda_invalid_operation(self):
+        """Test Lambda handler with invalid operation."""
+        event = {"operation": "invalid"}
+        result = lambda_handler(event, None)
+        assert "error" in result["body"]
